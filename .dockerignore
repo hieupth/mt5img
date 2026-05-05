@@ -1,0 +1,10 @@
+.git
+.gitignore
+LICENSE
+README.md
+accounts.txt
+accounts.txt.example
+docker-compose.yml
+.dockerignore
+*.md
+bots/
