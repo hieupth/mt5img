@@ -1,0 +1,33 @@
+services:
+  mt5:
+    image: hieupth/mt5img:latest
+    container_name: mt5img
+    restart: unless-stopped
+    secrets:
+      - accounts
+    volumes:
+      - mt5data:/config
+      - ./bots:/bots:ro
+    ports:
+      - "3000:3000"
+    # Wine requires unconfined seccomp for NtRaiseHardError and other syscalls
+    security_opt:
+      - seccomp=unconfined
+    # Running as root (PUID=0/PGID=0) for Wine/MT5 compatibility
+    environment:
+      - PUID=0
+      - PGID=0
+      - WINEDEBUG=-all
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "terminal64.exe"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+
+volumes:
+  mt5data:
+
+secrets:
+  accounts:
+    file: ./accounts.txt

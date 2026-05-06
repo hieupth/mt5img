@@ -13,7 +13,7 @@ MT5_PID=""
 
 cleanup() {
     echo "[start] Shutting down..."
-    kill "$MT5_PID" 2>/dev/null || true
+    [ -n "$MT5_PID" ] && kill "$MT5_PID" 2>/dev/null || true
     wineserver -k 2>/dev/null || true
     exit 0
 }
@@ -25,15 +25,15 @@ wine_wait() {
     wineserver -w &
     local WAIT_PID=$!
     local elapsed=0
-    while [ $elapsed -lt "$timeout" ]; do
-        if ! kill -0 $WAIT_PID 2>/dev/null; then
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if ! kill -0 "$WAIT_PID" 2>/dev/null; then
             return 0
         fi
         sleep 2
         elapsed=$((elapsed + 2))
     done
     echo "[start] WARNING: wineserver wait timed out after ${timeout}s"
-    kill $WAIT_PID 2>/dev/null || true
+    kill "$WAIT_PID" 2>/dev/null || true
     wineserver -k 2>/dev/null || true
     sleep 2
 }
@@ -67,18 +67,21 @@ else
 fi
 
 # --- Copy bot files from /bots to Experts directory ---
+mkdir -p "$EXPERTS_DIR"
 if [ -d "$BOTS_SRC" ] && [ "$(ls -A "$BOTS_SRC" 2>/dev/null)" ]; then
     echo "[start] Copying bot files from $BOTS_SRC"
     for f in "$BOTS_SRC"/*; do
         base=$(basename "$f")
-        # Rename .c files to .mq5 so MetaEditor can compile them
-        if [[ "$base" == *.c ]]; then
-            new_name="${base%.c}.mq5"
-            echo "[start]   $base -> $new_name (.c renamed to .mq5)"
-            cp -v "$f" "$EXPERTS_DIR/$new_name"
-        else
-            cp -v "$f" "$EXPERTS_DIR"/
-        fi
+        case "$base" in
+            *.c)
+                new_name="${base%.c}.mq5"
+                echo "[start]   $base -> $new_name (.c renamed to .mq5)"
+                cp -v "$f" "$EXPERTS_DIR/$new_name"
+                ;;
+            *.mq5|*.ex5)
+                cp -v "$f" "$EXPERTS_DIR"/
+                ;;
+        esac
     done
 else
     echo "[start] WARNING: No bot files found in $BOTS_SRC"
@@ -171,13 +174,23 @@ EOF
 fi
 
 # --- Launch MT5 ---
-echo "[start] Launching MetaTrader 5..."
-if [ -n "$LOGIN" ] && [ -f "$CONFIG_FILE" ]; then
-    wine "$TERMINAL" /portable /config:"C:\\startup.ini" &
-else
-    wine "$TERMINAL" /portable &
+if [ ! -f "$TERMINAL" ]; then
+    echo "[start] ERROR: terminal64.exe not found at $TERMINAL"
+    exit 1
 fi
-MT5_PID=$!
-echo "[start] MetaTrader 5 launched (PID=$MT5_PID)"
 
-wait $MT5_PID
+echo "[start] Launching MetaTrader 5..."
+while true; do
+    if [ -n "$LOGIN" ] && [ -f "$CONFIG_FILE" ]; then
+        wine "$TERMINAL" /portable /config:"C:\\startup.ini" &
+    else
+        wine "$TERMINAL" /portable &
+    fi
+    MT5_PID=$!
+    echo "[start] MetaTrader 5 launched (PID=$MT5_PID)"
+    wait "$MT5_PID" 2>/dev/null
+    echo "[start] MT5 exited, restarting in 10s..."
+    sleep 10
+    wineserver -k 2>/dev/null || true
+    sleep 2
+done

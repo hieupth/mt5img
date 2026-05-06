@@ -37,12 +37,19 @@ jobs:
         run: |
           docker run -d -e PUID=0 -e PGID=0 --name mt5-install mt5img-build /tmp/install.sh
           docker logs -f mt5-install &
-          timeout 900 docker wait mt5-install || true
+          LOGS_PID=$!
+          timeout 900 docker wait mt5-install
+          EXIT_CODE=$?
+          kill $LOGS_PID 2>/dev/null || true
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "ERROR: MT5 installation timed out or failed"
+            exit 1
+          fi
           docker cp mt5-install:/config/.wine/drive_c/Program\ Files/MetaTrader\ 5/terminal64.exe /tmp/terminal64.exe
           echo "MT5 installation verified"
 
       - name: Commit and push image
         run: |
-          docker commit mt5-install ${{ env.IMAGE }}:latest
+          docker commit --change 'CMD []' mt5-install ${{ env.IMAGE }}:latest
           docker push ${{ env.IMAGE }}:latest
           echo "Pushed ${{ env.IMAGE }}:latest"

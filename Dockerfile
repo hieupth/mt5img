@@ -25,5 +25,3 @@ COPY root/ /
 COPY scripts/start.sh /Metatrader/start.sh
 
 EXPOSE 3000
-
-VOLUME /config
