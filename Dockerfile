@@ -2,7 +2,9 @@ FROM ghcr.io/linuxserver/baseimage-kasmvnc:debianbookworm
 
 ENV TITLE="MetaTrader 5"
 ENV WINEDEBUG=-all
-ENV WINEPREFIX=/config/.wine
+# Install MT5 to a non-VOLUME path so docker commit captures the data.
+# start.sh copies from here to /config/.wine (the VOLUME) on first run.
+ENV WINEPREFIX=/opt/mt5-seed/.wine
 
 ARG WINE_BRANCH=devel
 ARG WINE_VERSION=11.8~bookworm-1
@@ -16,6 +18,7 @@ RUN dpkg --add-architecture i386 && \
         > /etc/apt/sources.list.d/winehq.list && \
     apt-get update && \
     apt-get install -y --install-recommends winehq-${WINE_BRANCH}=${WINE_VERSION} && \
+    apt-get install -y --no-install-recommends xvfb && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/install.sh /tmp/install.sh

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export DISPLAY=${DISPLAY:-:1}
-export WINEPREFIX=${WINEPREFIX:-/config/.wine}
+export WINEPREFIX=/opt/mt5-seed/.wine
 
 MT5_DIR="${WINEPREFIX}/drive_c/Program Files/MetaTrader 5"
 TERMINAL="$MT5_DIR/terminal64.exe"
@@ -29,6 +29,7 @@ wine_wait() {
 
 # --- Initialize Wine prefix ---
 echo "[install] Initializing Wine prefix..."
+mkdir -p "$WINEPREFIX"
 WINEDLLOVERRIDES=mscoree=d,mshtml=d wineboot --init
 echo "[install] Wine prefix created, waiting for services to finish..."
 wine_wait 300
@@ -85,3 +86,6 @@ echo "[install] MT5 installation complete"
 mkdir -p "$EXPERTS_DIR"
 
 echo "[install] Done. Wine prefix and MT5 are ready."
+
+# Clean up X11 lock files so the committed image doesn't conflict with KasmVNC at runtime
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1

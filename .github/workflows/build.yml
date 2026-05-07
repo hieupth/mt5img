@@ -35,7 +35,8 @@ jobs:
 
       - name: Run container to install MT5
         run: |
-          docker run -d -e PUID=0 -e PGID=0 --name mt5-install mt5img-build /tmp/install.sh
+          docker run -d --entrypoint "" -e WINEPREFIX=/opt/mt5-seed/.wine --name mt5-install mt5img-build \
+            bash -c 'Xvfb :1 -screen 0 1024x768x24 & sleep 2; export DISPLAY=:1; /tmp/install.sh'
           docker logs -f mt5-install &
           LOGS_PID=$!
           timeout 900 docker wait mt5-install
@@ -45,11 +46,69 @@ jobs:
             echo "ERROR: MT5 installation timed out or failed"
             exit 1
           fi
-          docker cp mt5-install:/config/.wine/drive_c/Program\ Files/MetaTrader\ 5/terminal64.exe /tmp/terminal64.exe
-          echo "MT5 installation verified"
+
+      - name: Verify MT5 installation
+        run: |
+          # docker exec fails on stopped containers; use docker cp for all checks
+          docker cp mt5-install:/opt/mt5-seed/.wine/drive_c/Program\ Files/MetaTrader\ 5/terminal64.exe /tmp/terminal64.exe
+          echo "terminal64.exe verified"
+
+          # system.reg is always created by wineboot — proves prefix is initialized
+          docker cp mt5-install:/opt/mt5-seed/.wine/system.reg /tmp/system.reg
+          echo "Wine prefix structure verified"
+
+          # Experts dir is created by install.sh; copy it to verify it exists
+          docker cp mt5-install:/opt/mt5-seed/.wine/drive_c/Program\ Files/MetaTrader\ 5/MQL5/Experts /tmp/experts-check
+          echo "Experts directory verified"
 
       - name: Commit and push image
         run: |
-          docker commit --change 'CMD []' mt5-install ${{ env.IMAGE }}:latest
+          # Restore s6-overlay ENTRYPOINT and clear CMD.
+          # docker run --entrypoint "" causes committed image to inherit empty entrypoint.
+          # CMD must be unset (not empty string) or s6-overlay rc.init tries to exec ""
+          docker commit \
+            --change 'ENTRYPOINT ["/init"]' \
+            --change 'CMD []' \
+            mt5-install ${{ env.IMAGE }}:latest
           docker push ${{ env.IMAGE }}:latest
           echo "Pushed ${{ env.IMAGE }}:latest"
+
+      - name: Smoke test runtime
+        run: |
+          # Create mock accounts file for credential parsing test
+          mkdir -p /tmp/test-secrets
+          echo "00000000:fakepassword:FakeServer" > /tmp/test-secrets/accounts
+
+          # Run committed image with test bots
+          docker run -d \
+            --name mt5-test \
+            --entrypoint "" \
+            -v /tmp/test-secrets/accounts:/run/secrets/accounts:ro \
+            -v $(pwd)/bots:/bots:ro \
+            ${{ env.IMAGE }}:latest \
+            bash -c 'rm -f /tmp/.X1-lock /tmp/.X11-unix/X1; Xvfb :1 -screen 0 1024x768x24 & sleep 2; export DISPLAY=:1; /Metatrader/start.sh'
+
+          # Wait for start.sh to progress through startup
+          sleep 30
+
+          # Check key startup milestones in logs
+          docker logs mt5-test 2>&1 | head -50
+          docker logs mt5-test 2>&1 | grep -q "Account: login=" || {
+            echo "ERROR: Credential parsing failed"
+            docker logs mt5-test
+            exit 1
+          }
+          docker logs mt5-test 2>&1 | grep -q "Found EA" || {
+            echo "ERROR: EA detection failed"
+            docker logs mt5-test
+            exit 1
+          }
+          docker logs mt5-test 2>&1 | grep -q "Pre-compile: launching MT5\|Launching MetaTrader 5" || {
+            echo "ERROR: MT5 launch not detected"
+            docker logs mt5-test
+            exit 1
+          }
+          echo "Smoke test passed"
+
+          docker stop mt5-test >/dev/null 2>&1 || true
+          docker rm mt5-test >/dev/null 2>&1 || true

@@ -2,14 +2,39 @@
 set -euo pipefail
 
 export DISPLAY=${DISPLAY:-:1}
-export WINEPREFIX=${WINEPREFIX:-/config/.wine}
+export WINEPREFIX=/config/.wine
 
+# Enable Wine debug output if DEBUG is set
+if [ "${DEBUG:-0}" = "1" ]; then
+    unset WINEDEBUG
+    echo "[start] Debug mode enabled (WINEDEBUG unset)"
+fi
+
+# Wait for X11 display socket to be ready (KasmVNC at runtime, Xvfb in CI)
+DISPLAY_WAIT=0
+X_SOCKET="/tmp/.X11-unix/X$(echo "$DISPLAY" | sed 's/://')"
+while [ ! -S "$X_SOCKET" ]; do
+    sleep 1
+    DISPLAY_WAIT=$((DISPLAY_WAIT + 1))
+    if [ $DISPLAY_WAIT -ge 30 ]; then
+        echo "[start] WARNING: X socket $X_SOCKET not found after 30s, proceeding anyway"
+        break
+    fi
+done
+
+MT5_SEED="/opt/mt5-seed/.wine"
 MT5_DIR="${WINEPREFIX}/drive_c/Program Files/MetaTrader 5"
 TERMINAL="$MT5_DIR/terminal64.exe"
 EXPERTS_DIR="$MT5_DIR/MQL5/Experts"
 BOTS_SRC="/bots"
 CONFIG_FILE="$WINEPREFIX/drive_c/startup.ini"
 MT5_PID=""
+
+# Seed the Wine prefix from the built-in data if the volume is empty
+if [ ! -d "$WINEPREFIX" ] && [ -d "$MT5_SEED" ]; then
+    echo "[start] Initializing Wine prefix from seed..."
+    cp -a "$MT5_SEED" "$WINEPREFIX"
+fi
 
 cleanup() {
     echo "[start] Shutting down..."
@@ -108,14 +133,14 @@ fi
 # MetaEditor /compile is unreliable under Wine, so we use MT5's internal compiler.
 # Launch MT5 without an EA config, wait for compilation to finish, then stop it.
 if [ -n "$EA_NAME" ] && [ ${#EX5_FILES[@]} -eq 0 ] && [ ${#MQ5_FILES[@]} -gt 0 ]; then
-    echo "[start] Pre-compile: launching MT5 to compile .mq5 files..."
+    expected_ex5="${MQ5_FILES[0]%.*}.ex5"
+    echo "[start] Pre-compile: launching MT5 to compile $(basename "${MQ5_FILES[0]}") -> $(basename "$expected_ex5")..."
     wine "$TERMINAL" /portable &
     MT5_PID=$!
 
     # Wait for .ex5 files to appear (MT5's internal compiler produces them)
     COMPILE_WAIT=0
     COMPILE_TIMEOUT=120
-    expected_ex5="${MQ5_FILES[0]%.*}.ex5"
     while [ ! -f "$expected_ex5" ] && [ $COMPILE_WAIT -lt $COMPILE_TIMEOUT ]; do
         sleep 3
         COMPILE_WAIT=$((COMPILE_WAIT + 3))
@@ -128,6 +153,8 @@ if [ -n "$EA_NAME" ] && [ ${#EX5_FILES[@]} -eq 0 ] && [ ${#MQ5_FILES[@]} -gt 0 ]
         echo "[start] Pre-compile: $(basename "$expected_ex5") produced successfully"
     else
         echo "[start] Pre-compile: WARNING: compilation did not produce .ex5 within ${COMPILE_TIMEOUT}s"
+        echo "[start] Pre-compile: Experts directory contents:"
+        ls -la "$EXPERTS_DIR" 2>/dev/null || echo "[start]   (directory not found)"
     fi
 
     # Stop the temporary MT5 instance
@@ -180,17 +207,28 @@ if [ ! -f "$TERMINAL" ]; then
 fi
 
 echo "[start] Launching MetaTrader 5..."
-while true; do
+RESTART_DELAY=10
+MAX_RESTARTS=10
+RESTART_COUNT=0
+while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
     if [ -n "$LOGIN" ] && [ -f "$CONFIG_FILE" ]; then
         wine "$TERMINAL" /portable /config:"C:\\startup.ini" &
     else
         wine "$TERMINAL" /portable &
     fi
     MT5_PID=$!
-    echo "[start] MetaTrader 5 launched (PID=$MT5_PID)"
+    echo "[start] MetaTrader 5 launched (PID=$MT5_PID, attempt $((RESTART_COUNT + 1))/$MAX_RESTARTS)"
     wait "$MT5_PID" 2>/dev/null
-    echo "[start] MT5 exited, restarting in 10s..."
-    sleep 10
-    wineserver -k 2>/dev/null || true
-    sleep 2
+    RESTART_COUNT=$((RESTART_COUNT + 1))
+
+    if [ $RESTART_COUNT -lt $MAX_RESTARTS ]; then
+        echo "[start] MT5 exited, restarting in ${RESTART_DELAY}s..."
+        sleep "$RESTART_DELAY"
+        wineserver -k 2>/dev/null || true
+        sleep 2
+        RESTART_DELAY=$((RESTART_DELAY * 2))
+        [ $RESTART_DELAY -gt 120 ] && RESTART_DELAY=120
+    fi
 done
+echo "[start] ERROR: MT5 exited $MAX_RESTARTS times. Giving up."
+exit 1

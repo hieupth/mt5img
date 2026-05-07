@@ -18,6 +18,7 @@ services:
       - PUID=0
       - PGID=0
       - WINEDEBUG=-all
+      # - DEBUG=1
     healthcheck:
       test: ["CMD", "pgrep", "-f", "terminal64.exe"]
       interval: 30s
